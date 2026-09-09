@@ -1,0 +1,188 @@
+# filebeat.yml - Enterprise Data Ingestion Configuration
+
+# ==================== INPUTS ====================
+
+filebeat.inputs:
+
+# ---------- Historical Data Input ----------
+- type: filestream
+  id: historical-data
+  enabled: true
+  paths:
+    - /data/historical_data/*.ndjson
+    - /data/historical_data/*.json
+  parsers:
+    - ndjson:
+        target: "processed"
+        add_error_key: true
+  tags: ["historical", "replay"]
+
+# ---------- Streaming Data Input ----------
+- type: filestream
+  id: live-stream-data
+  enabled: true
+  paths:
+    - /data/streaming_data/stream_*.ndjson
+  parsers:
+    - ndjson:
+        target: "processed"
+        add_error_key: true
+  tags: ["live-stream"]
+
+# ---------- Syslog Input ----------
+- type: syslog
+  id: syslog-collector
+  enabled: true
+  format: auto
+  tags: ["syslog", "network"]
+  protocol.tcp:
+    host: "0.0.0.0:5514"
+  protocol.udp:
+    host: "0.0.0.0:5514"
+
+# ---------- Custom Security Logs ----------
+- type: filestream
+  id: windows-security
+  enabled: true
+  paths:
+    - /data/windows_logs/security_*.evtx
+  tags: ["windows", "security"]
+
+# ---------- Threat Intelligence Feed ----------
+- type: httpjson
+  id: threat-intel-feed
+  enabled: true
+  url: "https://api.threatintel.com/v1/indicators"
+  interval: 3600
+  request.method: "GET"
+  headers:
+    Authorization: "Bearer ${THREAT_INTEL_API_KEY}"
+  response.split:
+    target: "body.results"
+    type: "array"
+  tags: ["threat-intel", "indicators"]
+  processors:
+    - add_tags:
+        tags: ["threat-intel", "enrichment"]
+        target: "processed.tags"
+
+# ==================== PROCESSORS ====================
+
+processors:
+  # Add environmental metadata
+  - add_cloud_metadata:
+      timeout: 3s
+  - add_host_metadata:
+      cache.ttl: 5m
+      geo:
+        name: "data-center-1"
+        location: "37.7749,-122.4194"
+  
+  # Tag based on source
+  - add_tags:
+      tags: ["security-pipeline", "enterprise"]
+      target: "processed.tags"
+  
+  # Enrich with threat intelligence
+  - script:
+      lang: javascript
+      source: >
+        function process(event) {
+          // Check for known threat indicators
+          var ip = event.Get("source.ip");
+          var domain = event.Get("destination.domain");
+          
+          if (ip && isThreatIP(ip)) {
+            event.Put("threat.indicator", true);
+            event.Put("threat.severity", "high");
+          }
+          
+          function isThreatIP(ip) {
+            // Simplified threat check
+            var threatRanges = ["10.0.0.0/8", "192.168.0.0/16"];
+            // In production, check against Redis/Memcached
+            return false;
+          }
+        }
+
+  # Drop sensitive data
+  - drop_fields:
+      fields: ["agent.ephemeral_id", "ecs", "event.original"]
+      when:
+        not:
+          has_fields: ["security.audit"]
+
+# ==================== OUTPUTS ====================
+
+output:
+  # Primary output to Logstash
+  logstash:
+    enabled: true
+    hosts: ["logstash01:5044", "logstash02:5044"]
+    loadbalance: true
+    compression_level: 6
+    worker: 4
+    ssl.enabled: true
+    ssl.verification_mode: full
+    ssl.certificate: "/etc/ssl/certs/filebeat.cert.pem"
+    ssl.key: "/etc/ssl/certs/filebeat.key.pem"
+    ssl.certificate_authorities: ["/etc/ssl/certs/ca-chain.cert.pem"]
+
+  # Backup to Kafka
+  kafka:
+    enabled: false  # Enable for HA
+    hosts: ["kafka01:9092", "kafka02:9092"]
+    topic: "security-logs"
+    partition.round_robin:
+      reachable_only: false
+    required_acks: 1
+    compression: gzip
+    max_message_bytes: 1000000
+    ssl.enabled: true
+    ssl.certificate_authorities: ["/etc/ssl/certs/ca-chain.cert.pem"]
+
+  # Local backup
+  file:
+    enabled: true
+    path: "/data/filebeat_output/"
+    filename: "filebeat-backup"
+    rotate_every_kb: 10000
+    number_of_files: 10
+
+# ==================== QUEUE SETTINGS ====================
+
+queue:
+  mem:
+    events: 4096
+    flush:
+      min_events: 2048
+      timeout: 1s
+
+# ==================== MODULES ====================
+
+filebeat.config.modules:
+  path: ${path.config}/modules.d/*.yml
+  reload.enabled: true
+  reload.period: 10s
+
+# ==================== MONITORING ====================
+
+monitoring:
+  enabled: true
+  elasticsearch:
+    hosts: ["elasticsearch01:9200"]
+    username: "monitoring_user"
+    password: "${MONITORING_PASSWORD}"
+    ssl.enabled: true
+    ssl.certificate_authorities: ["/etc/ssl/certs/ca-chain.cert.pem"]
+
+# ==================== LOGGING ====================
+
+logging:
+  level: info
+  to_files: true
+  files:
+    path: /var/log/filebeat
+    name: filebeat
+    keepfiles: 7
+    permissions: 0640
