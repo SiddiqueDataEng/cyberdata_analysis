@@ -1,46 +1,47 @@
-"""Shared configuration for the cybersecurity analytics pipeline."""
-
+"""Shared configuration — works locally and on Streamlit Cloud."""
 import os
+import streamlit as st
 from pathlib import Path
 
-# Paths
-ROOT        = Path(__file__).parent.parent
-DATA_DIR    = ROOT / "historical_data"
-DB_PATH     = str(ROOT / "analytics" / "cyber_warehouse.duckdb")
-REPORT_DIR  = ROOT / "analytics" / "reports"
-REPORT_DIR.mkdir(parents=True, exist_ok=True)
+# ── Detect environment ────────────────────────────────────────────────────────
+# On Streamlit Cloud the app root is /mount/src/<repo>/analytics/
+# Locally it's E:\Cyberdata\analytics\
+APP_DIR  = Path(__file__).parent          # .../analytics/
+ROOT_DIR = APP_DIR.parent                 # .../  (repo root)
 
-# OpenAI
-OPENAI_API_KEY = os.environ.get(
-    "OPENAI_API_KEY",
-    "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"
-)
+# ── Data paths ────────────────────────────────────────────────────────────────
+# NDJSON source — on cloud these are committed to the repo or downloaded
+DATA_DIR = ROOT_DIR / "historical_data"
 
-# Colour palette — consistent across all charts
+# DuckDB warehouse — always in /tmp on cloud (writable), local analytics/ dir
+if os.environ.get("HOME", "").startswith("/home") or \
+   str(APP_DIR).startswith("/mount"):
+    # Cloud / Linux
+    DB_PATH = "/tmp/cyber_warehouse.duckdb"
+else:
+    # Local Windows
+    DB_PATH = str(APP_DIR / "cyber_warehouse.duckdb")
+
+# ── OpenAI API Key ────────────────────────────────────────────────────────────
+try:
+    OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+except Exception:
+    OPENAI_API_KEY = os.environ.get(
+        "OPENAI_API_KEY",
+        "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"
+    )
+
+# ── Chart colours ─────────────────────────────────────────────────────────────
 COLORS = {
-    "primary":   "#4F8EF7",
-    "danger":    "#E74C3C",
-    "warning":   "#F39C12",
-    "success":   "#2ECC71",
-    "info":      "#1ABC9C",
-    "purple":    "#9B59B6",
-    "dark":      "#2C3E50",
-    "muted":     "#95A5A6",
+    "primary": "#58a6ff", "danger": "#f85149", "warning": "#ffa657",
+    "success": "#3fb950", "info":   "#1abc9c", "purple":  "#d2a8ff",
+    "muted":   "#8b949e",
 }
-
-SEVERITY_COLORS = {
-    "critical": "#E74C3C",
-    "high":     "#E67E22",
-    "medium":   "#F1C40F",
-    "low":      "#2ECC71",
-    "info":     "#3498DB",
-}
-
 ATTACK_COLORS = {
-    "apt":             "#9B59B6",
-    "ransomware":      "#E74C3C",
-    "data_exfil":      "#E67E22",
-    "cred_theft":      "#3498DB",
-    "brute_force":     "#F39C12",
-    "lateral_movement":"#1ABC9C",
+    "apt": "#d2a8ff", "ransomware": "#f85149",
+    "data_exfil": "#ffa657", "cred_theft": "#58a6ff",
+}
+SEVERITY_COLORS = {
+    "critical": "#f85149", "high": "#ffa657",
+    "medium": "#e3b341",   "low":  "#3fb950",
 }
