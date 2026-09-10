@@ -24,7 +24,10 @@ import os
 from pathlib import Path
 from datetime import datetime
 
-sys.path.insert(0, str(Path(__file__).parent))
+# Ensure analytics/ is always on the path regardless of cwd
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
 
 from config import DB_PATH, DATA_DIR, COLORS, ATTACK_COLORS
 from analytics_helpers import fmt_number, color_risk, render_nlp_page, render_story_dss
@@ -56,45 +59,47 @@ inject_css()
 # ── Warehouse bootstrap ───────────────────────────────────────────────────────
 def _build_warehouse_if_needed():
     """Build DuckDB from NDJSON files if warehouse doesn't exist or is empty."""
-    import os
     needs_build = (
         not os.path.exists(DB_PATH) or
         os.path.getsize(DB_PATH) < 1_000
     )
     if not needs_build:
-        # Quick sanity check
         try:
             c = duckdb.connect(DB_PATH, read_only=True)
-            n = c.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_name='fact_events'").fetchone()[0]
+            n = c.execute(
+                "SELECT COUNT(*) FROM information_schema.tables "
+                "WHERE table_name='fact_events'"
+            ).fetchone()[0]
             c.close()
             if n > 0:
-                return  # Already built
+                return
         except Exception:
             pass
 
-    # Build it
-    bar = st.progress(0, text="Building analytics warehouse from data files…")
+    bar = st.progress(0, text="⚙️ Building analytics warehouse from data files…")
     try:
-        sys.path.insert(0, str(Path(__file__).parent))
         from importlib.util import spec_from_file_location, module_from_spec
 
-        def load(name, file):
-            spec = spec_from_file_location(name, Path(__file__).parent / file)
-            mod = module_from_spec(spec)
-            sys.modules[name] = mod
+        def _load(alias, filename):
+            path = _HERE / filename
+            spec = spec_from_file_location(alias, path)
+            mod  = module_from_spec(spec)
+            sys.modules[alias] = mod
             spec.loader.exec_module(mod)
             return mod
 
-        bar.progress(10, text="Running ETL…")
-        etl = load("_etl", "01_etl.py")
+        bar.progress(10, text="Running ETL (loading NDJSON → DuckDB)…")
+        etl = _load("_etl", "01_etl.py")
         etl.run_etl(verbose=False)
 
         bar.progress(70, text="Building analytical marts…")
-        an = load("_analytical", "02_analytical.py")
+        an = _load("_analytical", "02_analytical.py")
         an.run_analytical(verbose=False)
 
-        bar.progress(100, text="Warehouse ready!")
-        st.success("✅ Warehouse built successfully.")
+        bar.progress(100, text="✅ Warehouse ready!")
+        st.success("Warehouse built successfully. Refreshing…")
+        st.rerun()
+
     except Exception as e:
         st.error(f"Warehouse build failed: {e}")
         import traceback
