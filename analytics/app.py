@@ -57,59 +57,152 @@ inject_css()
 
 
 # ── Warehouse bootstrap ───────────────────────────────────────────────────────
-def _build_warehouse_if_needed():
-    """Build DuckDB from NDJSON files if warehouse doesn't exist or is empty."""
-    needs_build = (
-        not os.path.exists(DB_PATH) or
-        os.path.getsize(DB_PATH) < 1_000
-    )
-    if not needs_build:
-        try:
-            c = duckdb.connect(DB_PATH, read_only=True)
-            n = c.execute(
-                "SELECT COUNT(*) FROM information_schema.tables "
-                "WHERE table_name='fact_events'"
-            ).fetchone()[0]
-            c.close()
-            if n > 0:
-                return
-        except Exception:
-            pass
+# Terabox share link for cyber_warehouse.duckdb
+_TERABOX_SHARE_URL = "https://1024terabox.com/s/1BE3pqdUS4Ueo-aQeZ1W-tw"
 
-    bar = st.progress(0, text="⚙️ Building analytics warehouse from data files…")
+def _db_is_valid() -> bool:
+    """Return True if the warehouse exists and has fact_events."""
+    if not os.path.exists(DB_PATH) or os.path.getsize(DB_PATH) < 10_000:
+        return False
     try:
-        from importlib.util import spec_from_file_location, module_from_spec
+        c = duckdb.connect(DB_PATH, read_only=True)
+        n = c.execute(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_name='fact_events'"
+        ).fetchone()[0]
+        c.close()
+        return n > 0
+    except Exception:
+        return False
 
-        def _load(alias, filename):
-            path = _HERE / filename
-            spec = spec_from_file_location(alias, path)
-            mod  = module_from_spec(spec)
-            sys.modules[alias] = mod
-            spec.loader.exec_module(mod)
-            return mod
 
-        bar.progress(10, text="Running ETL (loading NDJSON → DuckDB)…")
-        etl = _load("_etl", "01_etl.py")
-        etl.run_etl(verbose=False)
+def _download_from_terabox(bar) -> bool:
+    """
+    Try to download the DuckDB file from Terabox.
+    Terabox share links require a two-step fetch:
+      1. Hit the share URL to get the real download token/URL
+      2. Download the actual file
+    Returns True on success.
+    """
+    import urllib.request
+    import urllib.parse
+    import re
 
-        bar.progress(70, text="Building analytical marts…")
-        an = _load("_analytical", "02_analytical.py")
-        an.run_analytical(verbose=False)
+    bar.progress(5, text="🌐 Resolving Terabox download link…")
+    try:
+        # Step 1 — fetch share page to extract direct link
+        req = urllib.request.Request(
+            _TERABOX_SHARE_URL,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
 
-        bar.progress(100, text="✅ Warehouse ready!")
-        st.success("Warehouse built successfully. Refreshing…")
+        # Look for the direct download URL in the page source
+        patterns = [
+            r'"dlink"\s*:\s*"([^"]+)"',
+            r'downloadUrl["\s:]+([^"<\s]+\.duckdb[^"<\s]*)',
+            r'href="(https?://[^"]*download[^"]*duckdb[^"]*)"',
+        ]
+        direct_url = None
+        for pat in patterns:
+            m = re.search(pat, html)
+            if m:
+                direct_url = m.group(1).replace("\\u0026", "&").replace("\\/", "/")
+                break
+
+        if not direct_url:
+            return False
+
+        # Step 2 — download the file
+        bar.progress(15, text="⬇️ Downloading warehouse (this may take 1–2 min)…")
+        req2 = urllib.request.Request(
+            direct_url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        )
+        tmp_path = DB_PATH + ".tmp"
+        chunk_size = 1024 * 1024  # 1 MB
+        downloaded = 0
+        with urllib.request.urlopen(req2, timeout=120) as resp2:
+            total = int(resp2.headers.get("Content-Length", 0))
+            with open(tmp_path, "wb") as f:
+                while True:
+                    chunk = resp2.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total > 0:
+                        pct = min(90, 15 + int(downloaded / total * 75))
+                        mb = downloaded / 1_000_000
+                        bar.progress(pct, text=f"⬇️ Downloading… {mb:.0f} MB")
+
+        os.replace(tmp_path, DB_PATH)
+        return os.path.getsize(DB_PATH) > 10_000
+
+    except Exception as e:
+        st.warning(f"Terabox download attempt failed: {e}")
+        return False
+
+
+def _build_from_ndjson(bar) -> None:
+    """Fallback: build warehouse from NDJSON files in repo."""
+    from importlib.util import spec_from_file_location, module_from_spec
+
+    def _load(alias, filename):
+        path = _HERE / filename
+        spec = spec_from_file_location(alias, path)
+        mod  = module_from_spec(spec)
+        sys.modules[alias] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+    bar.progress(10, text="📂 Running ETL: NDJSON → DuckDB…")
+    etl = _load("_etl", "01_etl.py")
+    etl.run_etl(verbose=False)
+
+    bar.progress(75, text="📊 Building analytical marts…")
+    an = _load("_analytical", "02_analytical.py")
+    an.run_analytical(verbose=False)
+
+
+def _setup_warehouse():
+    """
+    Ensure the warehouse is ready.
+    Strategy (in order):
+      1. Already valid → skip
+      2. Download pre-built .duckdb from Terabox → fastest
+      3. Build from NDJSON files in repo → fallback
+    """
+    if _db_is_valid():
+        return  # Already good
+
+    bar = st.progress(0, text="🔄 Setting up analytics warehouse…")
+    try:
+        # Try download first
+        ok = _download_from_terabox(bar)
+        if ok and _db_is_valid():
+            bar.progress(100, text="✅ Warehouse downloaded successfully!")
+            bar.empty()
+            st.rerun()
+            return
+
+        # Fallback to building from NDJSON
+        st.info("Building warehouse from data files (first run takes ~60s)…")
+        _build_from_ndjson(bar)
+        bar.progress(100, text="✅ Warehouse built!")
+        bar.empty()
         st.rerun()
 
     except Exception as e:
-        st.error(f"Warehouse build failed: {e}")
+        bar.empty()
+        st.error(f"Warehouse setup failed: {e}")
         import traceback
         st.code(traceback.format_exc())
         st.stop()
-    finally:
-        bar.empty()
 
 
-_build_warehouse_if_needed()
+_setup_warehouse()
 
 
 # ── DB connection (session_state — no cache decorators) ───────────────────────
