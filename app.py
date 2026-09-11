@@ -47,6 +47,22 @@ except Exception:
     def render_nlp_page(): st.info("NLP module not available in this environment.")
     def render_story_dss(*a): st.info("Story module not available.")
 
+try:
+    from cyber_glossary import render_glossary_page, render_context_page, render_guide_page
+    _HAS_GLOSSARY = True
+except Exception:
+    _HAS_GLOSSARY = False
+    def render_glossary_page(): st.info("Glossary module unavailable.")
+    def render_context_page(): st.info("Context module unavailable.")
+    def render_guide_page(): st.info("Guide module unavailable.")
+
+try:
+    from report_generator import render_report_page
+    _HAS_REPORTS = True
+except Exception:
+    _HAS_REPORTS = False
+    def render_report_page(*a, **kw): st.info("Report generator unavailable.")
+
 
 # ── Environment detection ─────────────────────────────────────────────────────
 IS_CLOUD = not os.path.exists(str(Path(__file__).parent / "cyber_warehouse.duckdb"))
@@ -368,9 +384,13 @@ with st.sidebar:
     page = st.radio("Navigation", [
         "🏠 Executive Summary", "📊 KPI Dashboard", "🌐 Network & Firewall",
         "🚨 Threat Intelligence", "🔐 Auth & Identity", "💻 Endpoint & Process",
-        "⚔️ Attack & Kill Chain", "🔍 Anomaly Detection", "🌍 Application Analytics",
+        "⚔️ Attack & Kill Chain", "🔍 Anomaly Detection", "📱 Application Analytics",
         "🧠 NLP SQL Explorer", "📖 Story & DSS",
+        "─────────────────",
+        "📚 Cyber Glossary", "🔭 Real-World Context", "🎓 Training Guide",
+        "📄 Report Generator",
     ])
+    st.markdown("<div style='margin-top:-8px'><small style='color:#8b949e'>── Knowledge & Reports ──</small></div>", unsafe_allow_html=True)
     st.divider()
     dr = qdf("SELECT CAST(MIN(event_date) AS DATE) AS mn, CAST(MAX(event_date) AS DATE) AS mx FROM mart_kpi_daily")
     if not dr.empty and dr["mn"].iloc[0] is not None:
@@ -717,7 +737,7 @@ elif page == "🔍 Anomaly Detection":
 # ════════════════════════════════════════════════════════════════════════════
 # PAGE: APPLICATION ANALYTICS
 # ════════════════════════════════════════════════════════════════════════════
-elif page == "🌍 Application Analytics":
+elif page == "📱 Application Analytics":
     st.title("🌍 Web Application Analytics")
     http=qdf(f"SELECT * FROM mart_http_status WHERE {DRANGE} ORDER BY event_date")
     err=qdf(f"SELECT * FROM mart_web_error_trend WHERE CAST(DATE_TRUNC('day',hour_window) AS DATE) BETWEEN '{d_start}' AND '{d_end}' ORDER BY hour_window LIMIT 200")
@@ -761,3 +781,38 @@ elif page == "📖 Story & DSS":
     brt=qdf("SELECT COUNT(*) AS cnt FROM mart_brute_force WHERE severity='CRITICAL'")
     dns=qdf("SELECT COUNT(*) AS cnt FROM mart_dns_summary WHERE possible_dns_tunnel")
     render_story_dss(kpi,atks,brt,dns,d_start,d_end)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# PAGE: CYBER GLOSSARY
+# ════════════════════════════════════════════════════════════════════════════
+elif page == "📚 Cyber Glossary":
+    render_glossary_page()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# PAGE: REAL-WORLD CONTEXT
+# ════════════════════════════════════════════════════════════════════════════
+elif page == "🔭 Real-World Context":
+    render_context_page()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# PAGE: TRAINING GUIDE
+# ════════════════════════════════════════════════════════════════════════════
+elif page == "🎓 Training Guide":
+    render_guide_page()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# PAGE: REPORT GENERATOR
+# ════════════════════════════════════════════════════════════════════════════
+elif page == "📄 Report Generator":
+    render_report_page(con, d_start, d_end, qdf, IS_CLOUD)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# DIVIDER (separator item — ignore)
+# ════════════════════════════════════════════════════════════════════════════
+elif page == "─────────────────":
+    st.info("Select a page from the navigation above.")
