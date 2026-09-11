@@ -1,50 +1,38 @@
-"""
-Shared configuration.
-Works on Streamlit Cloud (/mount/src/<repo>/analytics/app.py)
-and locally (E:\\Cyberdata\\analytics\\app.py).
-"""
+"""Shared configuration — works locally and on Streamlit Cloud."""
 import os
 from pathlib import Path
 
-# ── Resolve paths robustly ────────────────────────────────────────────────────
-APP_DIR  = Path(__file__).resolve().parent   # .../analytics/
-ROOT_DIR = APP_DIR.parent                    # repo root
+ROOT     = Path(__file__).parent.parent
+_HERE    = Path(__file__).parent
 
-# NDJSON source data
-DATA_DIR = ROOT_DIR / "historical_data"
+# On Streamlit Cloud → /tmp (downloaded at startup)
+# Locally → analytics/cyber_warehouse.duckdb
+if os.environ.get("STREAMLIT_SHARING_MODE") or os.path.exists("/mount/src"):
+    DB_PATH = "/tmp/cyber_warehouse.duckdb"
+else:
+    # Local path — always use the file sitting next to this config.py
+    _local = _HERE / "cyber_warehouse.duckdb"
+    DB_PATH = str(_local)
 
-# DuckDB warehouse — /tmp is writable on Streamlit Cloud; local uses analytics/
-_on_cloud = str(APP_DIR).startswith("/mount") or os.environ.get("STREAMLIT_SHARING_MODE")
-DB_PATH   = "/tmp/cyber_warehouse.duckdb" if _on_cloud else str(APP_DIR / "cyber_warehouse.duckdb")
+DATA_DIR    = ROOT / "historical_data"
+REPORT_DIR  = _HERE / "reports"
+REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
-# ── OpenAI API key ────────────────────────────────────────────────────────────
-def _get_openai_key():
-    # 1. Streamlit secrets (cloud)
-    try:
-        import streamlit as st
-        return st.secrets["OPENAI_API_KEY"]
-    except Exception:
-        pass
-    # 2. Environment variable
-    key = os.environ.get("OPENAI_API_KEY", "")
-    if key:
-        return key
-    # 3. Hardcoded fallback
-    return "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"
+OPENAI_API_KEY = os.environ.get(
+    "OPENAI_API_KEY",
+    "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"
+)
 
-OPENAI_API_KEY = _get_openai_key()
-
-# ── Colour palettes ───────────────────────────────────────────────────────────
 COLORS = {
-    "primary": "#58a6ff", "danger":  "#f85149", "warning": "#ffa657",
-    "success": "#3fb950", "info":    "#1abc9c", "purple":  "#d2a8ff",
-    "muted":   "#8b949e",
+    "primary": "#4F8EF7", "danger": "#E74C3C", "warning": "#F39C12",
+    "success": "#2ECC71", "info": "#1ABC9C", "purple": "#9B59B6",
+    "dark": "#2C3E50", "muted": "#95A5A6",
 }
 ATTACK_COLORS = {
-    "apt": "#d2a8ff", "ransomware": "#f85149",
-    "data_exfil": "#ffa657", "cred_theft": "#58a6ff",
+    "apt": "#9B59B6", "ransomware": "#E74C3C",
+    "data_exfil": "#E67E22", "cred_theft": "#3498DB",
 }
 SEVERITY_COLORS = {
-    "critical": "#f85149", "high": "#ffa657",
-    "medium":   "#e3b341", "low":  "#3fb950",
+    "critical": "#E74C3C", "high": "#E67E22",
+    "medium": "#F1C40F", "low": "#2ECC71",
 }
