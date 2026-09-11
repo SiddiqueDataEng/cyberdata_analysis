@@ -1,7 +1,0 @@
-duckdb
-pandas
-numpy
-plotly
-openai
-python-dateutil
-gdown
