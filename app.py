@@ -6,7 +6,11 @@ CyberData Analytics Platform
 """
 import streamlit as st, sys, os
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent))
+_HERE = Path(__file__).parent
+# Ensure both the app root AND the analytics sub-folder are on the path
+# so imports work whether app.py is at root or inside analytics/
+sys.path.insert(0, str(_HERE))
+sys.path.insert(0, str(_HERE / "analytics"))
 
 st.set_page_config(page_title="CyberData Analytics", page_icon="🛡️",
                    layout="wide", initial_sidebar_state="expanded")
@@ -65,7 +69,19 @@ except Exception:
 
 
 # ── Environment detection ─────────────────────────────────────────────────────
-IS_CLOUD = not os.path.exists(str(Path(__file__).parent / "cyber_warehouse.duckdb"))
+# DB can live next to app.py (root) OR inside analytics/ subfolder
+_db_root      = _HERE / "cyber_warehouse.duckdb"
+_db_analytics = _HERE / "analytics" / "cyber_warehouse.duckdb"
+_db_cloud     = Path("/tmp/cyber_warehouse.duckdb")
+
+if _db_root.exists():
+    _LOCAL_DB = str(_db_root)
+elif _db_analytics.exists():
+    _LOCAL_DB = str(_db_analytics)
+else:
+    _LOCAL_DB = None
+
+IS_CLOUD = _LOCAL_DB is None
 
 
 # ── Demo warehouse builder (cloud only) ──────────────────────────────────────
@@ -343,9 +359,7 @@ def get_con():
     if IS_CLOUD:
         with st.spinner("⚙️ Building demo warehouse…"):
             return _build_demo()
-    # Local: connect to real warehouse
-    db_path = str(Path(__file__).parent / "cyber_warehouse.duckdb")
-    return duckdb.connect(db_path, read_only=True)
+    return duckdb.connect(_LOCAL_DB, read_only=True)
 
 
 con = get_con()
@@ -728,7 +742,8 @@ elif page == "🔍 Anomaly Detection":
             fig=px.bar(top,x="hostname",y="z_score",color="event_count",title="Top Anomalous Hosts",color_continuous_scale="Reds")
             fig.update_layout(xaxis_tickangle=-45)
             show(fig,"anomaly_top_hosts",h=300)
-    fig=px.scatter(anom,x="mean",y="event_count",color="anomaly_label",size="z_score",
+    fig=px.scatter(anom,x="mean",y="event_count",color="anomaly_label",
+        size=anom["z_score"].clip(lower=0.5).tolist(),
         hover_data=["hostname"],title="Expected vs Actual Events per Host-Hour",
         color_discrete_map={"Anomalous":"#f85149","Elevated":"#ffa657","Normal":"#3fb950","Low Activity":"#8b949e"})
     show(fig,"anomaly_scatter",h=380)
